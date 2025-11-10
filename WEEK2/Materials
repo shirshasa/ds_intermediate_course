@@ -1,0 +1,4 @@
+- [CatBoost vs TabNet: результаты и сравнение (PMC)](https://pmc.ncbi.nlm.nih.gov/articles/PMC11506879/) — benchmark моделей, специфика.[](https://pmc.ncbi.nlm.nih.gov/articles/PMC11506879/)​
+- [Cost Factors and Challenges in ML Projects](https://blog.ascendingdc.com/mastering-machine-learning-project-costs-challenges-and-feasibility-a-comprehensive-guide-to-key-factors-for-success) — разбор cost vs quality
+- [Proxy-label approaches for semi-supervised learning (Ruder blog)](https://www.ruder.io/semi-supervised/) — Proxy labeling, self-ensembling.[](https://www.ruder.io/semi-supervised/)​
+- [Semi-supervised Learning with Missing Values Imputation](https://arxiv.org/pdf/2106.01708.pdf) — работа с частично пропущенными данными.[](https://arxiv.org/pdf/2106.01708.pdf)
