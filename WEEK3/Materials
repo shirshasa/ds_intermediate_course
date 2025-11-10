@@ -1,0 +1,3 @@
+- [How would you design a system for real-time stream processing (Kafka + Flink/Spark)](https://www.designgurus.io/answers/detail/how-would-you-design-a-system-for-real-time-stream-processing-eg-using-apache-kafka-with-apache-flink-or-spark-streaming) — архитектура стримингового пайплайна
+- [NVIDIA Inference Optimization: batching, GPU](https://developer.nvidia.com/blog/mastering-llm-techniques-inference-optimization/) — batching, caching, GPU-ускорение.
+- [How to monitor and retrain ML models in prod against concept drift](https://wild.codes/candidate-toolkit-question/how-to-monitor-and-retrain-ml-models-in-prod-against-concept-drift) — практические советы
