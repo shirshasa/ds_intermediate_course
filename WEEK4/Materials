@@ -1,0 +1,4 @@
+- [Best practices to optimize Spot Instances (AWS blog)](https://aws.amazon.com/blogs/compute/best-practices-to-optimize-your-amazon-ec2-spot-instances-usage/) — best practices cloud ML
+- [Spot instances decoded: Optimizing utilization and savings (DoiT)](https://www.doit.com/optimizing-spot-instance-utilization-and-savings/) — автоскейлинг, spot-инстансы
+- [Feature Store Benchmark Comparison: Hopsworks and Feast](https://www.hopsworks.ai/post/feature-store-benchmark-comparison-hopsworks-and-feast) — сравнение feature store.
+- [CI/CD for Machine Learning: Data & Feature Tests (DVC)](https://dvc.org/doc/use-cases/ci-cd-for-machine-learning) — тестирование моделей и данных
