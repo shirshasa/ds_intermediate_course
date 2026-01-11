@@ -6,10 +6,10 @@ from scipy import stats
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from utils import calculate_psi
+from utils import calculate_psi, _rolling_mad, _rolling_quantile, _rolling_slope, add_cusum_features
 
 
-# 2. Детекторы дрифта
+# 2. Drift detectors
 class DriftDetector:
     def __init__(self, reference_window_size: int = 24 * 7):
         self.ref_size = int(reference_window_size)
@@ -48,13 +48,13 @@ class DriftDetector:
         mde: Optional[float] = None,
         verbose: bool = False,
     ):
-        """Основной метод детекции.
+        """Main detection method.
 
-        Сравнивает два окна:
+        Compares two windows:
         - reference: [current_idx - window_size - ref_size, current_idx - window_size)
         - current:   [current_idx - window_size, current_idx)
 
-        Возвращает None, если истории недостаточно.
+        Returns None if there is not enough history.
         """
 
         if current_idx is None:
@@ -125,98 +125,20 @@ class MetricConfig:
     features: Optional[List[str]] = None
     mde: Optional[float] = None
 
-    # --- Trend drift (separate output, does NOT affect main alerts) ---
+    # --- Trend drift (not used) ---
     detect_trend_drift: bool = False
 
     # Slope feature construction
     trend_rolling_window: Optional[int] = None   # rolling window for slope; default -> window_size
     trend_source: str = "value"               # "value" or "roll_mean" (if available)
-
-    # Drift detection windows on the slope feature
     trend_window_size: Optional[int] = None            # current window on slope; default -> window_size
     trend_reference_window_size: Optional[int] = None  # reference size; default -> reference_window_size
-
-    # Thresholds (optional overrides)
     trend_ks_threshold: Optional[float] = None
     trend_psi_threshold: Optional[float] = None
     trend_psi_bins: Optional[int] = None
-
-    # Optional effect-size gate on slope change (absolute, in "units per hour")
     trend_mde: Optional[float] = None
-
-    # Persistence/cooldown for trend drift stream (defaults to main if None)
     trend_persistence: Optional[int] = None
     trend_cooldown: Optional[int] = None
-
-
-def _mad_np(x: np.ndarray) -> float:
-    x = x[~np.isnan(x)]
-    if x.size == 0:
-        return np.nan
-    med = np.median(x)
-    return float(np.median(np.abs(x - med)))
-
-
-def _rolling_mad(series: pd.Series, window: int) -> pd.Series:
-    return series.rolling(window).apply(lambda a: _mad_np(np.asarray(a, dtype=float)), raw=False)
-
-
-def _rolling_quantile(series: pd.Series, window: int, q: float) -> pd.Series:
-    return series.rolling(window).quantile(q)
-
-
-def cusum_positive(z: np.ndarray, k: float) -> np.ndarray:
-    s = np.zeros_like(z, dtype=float)
-    acc = 0.0
-    for i, zi in enumerate(z):
-        if np.isnan(zi):
-            s[i] = np.nan
-            continue
-        acc = max(0.0, acc + (zi - k))
-        s[i] = acc
-    return s
-
-
-def add_cusum_features(
-    df: pd.DataFrame,
-    window_ref: int = 12,
-    window_size: int = 12,
-    k: float = 0.1,
-    eps: float = 1e-9,
-) -> pd.DataFrame:
-    x = df["value"].astype(float)
-    mu0 = x.rolling(window_ref).mean()
-    sigma0 = x.rolling(window_ref).std() + eps
-    z = (x - mu0) / sigma0
-    df["z_refnorm"] = z
-    df["cusum_pos"] = cusum_positive(z.to_numpy(), k=k)
-    u = (z**2) - 1.0
-    df["cusum_var_pos"] = cusum_positive(u.to_numpy(), k=0.1)
-    df["cusum_pos_delta"] = df["cusum_pos"].diff(1)
-    df["cusum_pos_rollmax"] = df["cusum_pos"].rolling(window_size).max()
-    return df
-
-def _rolling_slope(series: pd.Series, window: int) -> pd.Series:
-    """Rolling OLS slope over last `window` points for an equally-spaced time axis."""
-    window = int(window)
-    if window < 2:
-        return pd.Series(index=series.index, dtype=float)
-
-    x = np.arange(window, dtype=float)
-    x_mean = x.mean()
-    denom = float(((x - x_mean) ** 2).sum())
-    if denom <= 0:
-        return pd.Series(index=series.index, dtype=float)
-
-    def _slope(arr: np.ndarray) -> float:
-        y = np.asarray(arr, dtype=float)
-        if np.isnan(y).all():
-            return np.nan
-        y_mean = np.nanmean(y)
-        num = np.nansum((x - x_mean) * (y - y_mean))
-        return float(num / denom)
-
-    return series.rolling(window).apply(lambda a: _slope(np.asarray(a)), raw=False)
 
 
 def build_features(
@@ -357,10 +279,6 @@ class AlertSystem:
         self._features = feats
         return feats
 
-    # -------------------------
-    # Trend drift (separate stream)
-    # -------------------------
-
     def compute_trend_features(self, df: pd.DataFrame) -> Dict[str, pd.DataFrame]:
         """Computes and caches trend/slope features for metrics with detect_trend_drift=True."""
         if not self._features:
@@ -375,6 +293,11 @@ class AlertSystem:
             trend_feats[metric] = build_trend_features(feats[metric], cfg.trend_rolling_window or cfg.window_size, cfg.trend_source )
         self._trend_features = trend_feats
         return trend_feats
+
+
+    # -------------------------
+    # Trend drift (separate stream, not used, experimental)
+    # -------------------------
 
     def detect_trend_drift(self, df: pd.DataFrame, verbose: bool = False) -> pd.DataFrame:
         """Detects trend (slope) drift per metric and returns a separate dataframe.
@@ -476,8 +399,7 @@ class AlertSystem:
             feature_list = cfg.features if cfg.features is not None else self.DEFAULT_FEATURES
             min_k = max(1, int(cfg.min_features_to_alert))
 
-            n = len(feat_df)
-            for end in range(1, n + 1):
+            for end in range(1, len(feat_df) + 1):
                 if state["cooldown"] > 0:
                     state["cooldown"] -= 1
 
@@ -511,6 +433,7 @@ class AlertSystem:
                     if res["drift"]:
                         drifted_features.append(f)
 
+
                 drift_now = len(drifted_features) >= min_k
                 state["run"] = state["run"] + 1 if drift_now else 0
 
@@ -530,11 +453,28 @@ class AlertSystem:
                             "psi_threshold": cfg.psi_threshold,
                             "min_features_to_alert": min_k,
                             "evidence": evidence,
+                            "status": "alert"
                         }
                     )
                     state["cooldown"] = cfg.cooldown
 
                 elif drift_now and state["run"] >= cfg.persistence:
+                    all_alerts.append(
+                        {
+                            "timestamp": ts,
+                            "idx": end - 1,
+                            "metric": metric,
+                            "drift_features": drifted_features,
+                            "num_drift_features": len(drifted_features),
+                            "persistence": cfg.persistence,
+                            "cooldown": cfg.cooldown,
+                            "ks_threshold": cfg.ks_threshold,
+                            "psi_threshold": cfg.psi_threshold,
+                            "min_features_to_alert": min_k,
+                            "evidence": evidence,
+                            "status": "cooldown"
+                        }
+                    )
                     state["cooldown"] = cfg.cooldown
 
         alerts_df = pd.DataFrame(all_alerts)
@@ -551,13 +491,13 @@ class AlertSystem:
         return self._trend_features
 
 
-# 4. Оценка качества
+# 4. Quality evaluation
 def evaluate_alerts(true_drift_points, detected_points, tolerance=50):
     """
     true_drift_points: list[int] or list[pd.Timestamp]
     detected_points:   list[int] or list[pd.Timestamp]
-    tolerance: допустимая задержка обнаружения в точках (если int-индексы)
-    Возвращает dict с basic-метриками.
+    tolerance: allowed detection delay in points (if using int indices)
+    Returns a dict with basic metrics.
     """
     if len(true_drift_points) == 0:
         return {"precision": np.nan, "recall": np.nan, "f1": np.nan, "tp": 0, "fp": len(detected_points), "fn": 0}
@@ -586,13 +526,13 @@ def evaluate_alerts(true_drift_points, detected_points, tolerance=50):
     return {"precision": precision, "recall": recall, "f1": f1, "tp": tp, "fp": fp, "fn": fn, "fpr": fp/(len(det))}
 
 
-# 5. Визуализация
+# 5. Visualization
 def plot_results(df, alerts_df, true_drifts):
     """
 
     df: DataFrame
-    alerts_df: DataFrame с колонками ['metric', 'idx'] (idx — индекс в ряде)
-    true_drifts: dict[str, list[int]] с индексами дрифтов
+    alerts_df: DataFrame with columns ['metric', 'idx'] (idx is the index in the series)
+    true_drifts: dict[str, list[int]] with drift indices
     """
     metrics = ['requests', 'response_time', 'error_rate', 'cpu_usage']
     titles = [
@@ -623,7 +563,7 @@ def plot_results(df, alerts_df, true_drifts):
 
         # alerts
         if alerts_df is not None and len(alerts_df) > 0:
-            am = alerts_df[alerts_df["metric"] == metric]
+            am = alerts_df[(alerts_df["metric"] == metric) & (alerts_df["status"] == "alert")]
             first_alert = True
             for idx_point in am["idx"].tolist():
                 ax.axvline(
@@ -633,6 +573,19 @@ def plot_results(df, alerts_df, true_drifts):
                     linewidth=2,
                     alpha=0.7,
                     label='Alert' if first_alert else ''
+                )
+                first_alert = False
+
+            am = alerts_df[(alerts_df["metric"] == metric) & (alerts_df["status"] == "cooldown")]
+            first_alert = True
+            for idx_point in am["idx"].tolist():
+                ax.axvline(
+                    x=int(idx_point),
+                    color='lightgray',
+                    linestyle='-',
+                    linewidth=2,
+                    alpha=0.2,
+                    label='Cooldown' if first_alert else ''
                 )
                 first_alert = False
 
@@ -646,7 +599,6 @@ def plot_results(df, alerts_df, true_drifts):
     plt.show()
 
 
-
 def plot_trend_alerts_all_metrics(
     df,
     alerts_trend,
@@ -657,24 +609,22 @@ def plot_trend_alerts_all_metrics(
     figsize=(15, 12),
 ):
     """
-    Рисует тренд-дрифт алерты для всех метрик (4 сабплота).
-    Опционально (show_slope=True) дополнительно рисует trend_slope для каждой метрики
-    отдельным графиком в той же функции (без вызова других функций).
+    Plots trend-drift alerts for all metrics.
 
     Parameters
     ----------
     df : pd.DataFrame
-        Исходные данные, содержит колонки из metrics.
+        Input data; contains columns listed in metrics.
     alerts_trend : pd.DataFrame
-        DataFrame из detect_trend_drift с колонками минимум ['metric','idx'].
+        DataFrame returned by detect_trend_drift with at least ['metric','idx'] columns.
     metrics : tuple/list
-        Какие метрики рисовать.
+        Which metrics to plot.
     trend_features_by_metric : dict[str, pd.DataFrame] | None
-        Словарь {metric: trend_features_df} с колонкой 'trend_slope'.
+        Dict {metric: trend_features_df} with a 'trend_slope' column.
     show_slope : bool
-        Рисовать ли slope-графики (если trend_features_by_metric передан).
+        Whether to draw slope charts (if trend_features_by_metric is provided).
     """
-    # --- 1) Основные графики: данные + вертикальные линии алертов ---
+    # --- 1) Main plots: data + vertical alert lines ---
     x = range(len(df))
     fig, axes = plt.subplots(len(metrics), 1, figsize=figsize, sharex=True)
 
@@ -683,14 +633,14 @@ def plot_trend_alerts_all_metrics(
 
     for metric, ax in zip(metrics, axes):
         if metric not in df.columns:
-            raise ValueError(f"В df нет колонки '{metric}'")
+            raise ValueError(f"df does not contain column '{metric}'")
 
         ax.plot(x, df[metric].astype(float).to_numpy(), linewidth=1, alpha=0.75, label="Data")
 
         am = None
         if alerts_trend is not None and len(alerts_trend) > 0:
             if "metric" not in alerts_trend.columns or "idx" not in alerts_trend.columns:
-                raise ValueError("alerts_trend должен содержать колонки ['metric','idx']")
+                raise ValueError("alerts_trend must contain columns ['metric','idx']")
             am = alerts_trend[alerts_trend["metric"] == metric]
 
         if am is not None and len(am) > 0:
@@ -715,12 +665,8 @@ def plot_trend_alerts_all_metrics(
     plt.tight_layout()
     plt.show()
 
-    # --- 2) Опционально: slope-графики (каждая метрика отдельно) ---
-    if not show_slope:
-        return
-
-    if not trend_features_by_metric:
-        # Нечего рисовать
+    # --- 2) Optional: slope plots (each metric separately) ---
+    if not show_slope or not trend_features_by_metric:
         return
 
     for metric in metrics:
